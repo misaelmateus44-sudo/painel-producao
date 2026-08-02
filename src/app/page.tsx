@@ -45,6 +45,7 @@ export default function Home() {
   const [processandoAcao, setProcessandoAcao] = useState<string | null>(null);
 
   const [horaAtual, setHoraAtual] = useState(Date.now());
+  const [clockOffset, setClockOffset] = useState<number>(0); // NOVO: Escudo Anti-Drift do Relógio
   const [timersLocais, setTimersLocais] = useState<Record<string, { inicio: number, acumulado: number }>>({});
   const bloqueiosLocais = useRef<Record<string, number>>({});
   
@@ -82,13 +83,15 @@ export default function Home() {
     try {
       const resposta = await fetch('/api/notion', { cache: 'no-store' });
       const dados = await resposta.json();
-      const agora = Date.now();
       
+      // Ajusta o relógio interno para sincronia perfeita com o Servidor (Acaba com os saltos)
+      if (dados.serverTime) setClockOffset(dados.serverTime - Date.now());
+      
+      const agora = Date.now();
       const aplicarEscudo = (prev: any[], novos: any[]) => {
         const prevMap = new Map(prev.map((p: any) => [p.id, p]));
         return (novos || []).map((p: any) => {
           const travadoEm = bloqueiosLocais.current[p.id];
-          // Escudo de 20s para garantir que o Notion salvou o pause
           if (travadoEm && (agora - travadoEm < 20000)) return prevMap.get(p.id) || p;
           return p;
         });
@@ -123,12 +126,7 @@ export default function Home() {
   const ideias = workspaceAtual ? ideiasIniciais.filter((i: any) => i.properties?.Workspace?.select?.name === workspaceAtual || (!i.properties?.Workspace?.select?.name && workspaceAtual === "Geral")) : [];
 
   const lidarComEntradaWorkspace = (nome: string) => { setWorkspaceAtual(nome); setFiltroAtivo(null); };
-
-  const criarNovoWorkspaceVirtual = () => {
-    if (!novoWorkspaceNome.trim()) return;
-    setWorkspaceAtual(novoWorkspaceNome.trim());
-    setNovoWorkspaceNome("");
-  };
+  const criarNovoWorkspaceVirtual = () => { if (!novoWorkspaceNome.trim()) return; setWorkspaceAtual(novoWorkspaceNome.trim()); setNovoWorkspaceNome(""); };
 
   useEffect(() => {
     if (projetoSelecionado) {
@@ -150,16 +148,17 @@ export default function Home() {
     let tempoDecorrer = 0;
     let oldFase = "";
 
-    // Lógica de Auto-Pause se mudar de fase com o relógio rodando
     const pAtual = projetosIniciais.find(p => p.id === idAlvo);
+    // Escudo de Auto-Pause (Impede pular o tempo se você mudar a fase com relógio rodando)
     if (pAtual && propriedade === 'Fase Atual' && pAtual.properties?.['Status do Relógio']?.select?.name === 'Rodando') {
       autoPaused = true;
       oldFase = pAtual.properties?.['Fase Atual']?.select?.name || fasesDoSistema[0];
       const inicioIso = pAtual.properties?.['Último Início']?.date?.start;
       const acumuladoAntigo = pAtual.properties?.[`Tempo ${oldFase}`]?.number || 0;
       
-      const inicioReal = timersLocais[idAlvo]?.inicio || (inicioIso ? new Date(inicioIso).getTime() : Date.now());
-      const decorrido = Math.floor((Date.now() - inicioReal) / 1000);
+      const agoraSincronizado = Date.now() + clockOffset;
+      const inicioReal = timersLocais[idAlvo]?.inicio || (inicioIso ? new Date(inicioIso).getTime() : agoraSincronizado);
+      const decorrido = Math.floor((agoraSincronizado - inicioReal) / 1000);
       tempoDecorrer = acumuladoAntigo + (decorrido > 0 ? decorrido : 0);
       
       setTimersLocais(prev => { const copy = { ...prev }; delete copy[idAlvo]; return copy; });
@@ -224,10 +223,7 @@ export default function Home() {
     setIdeiasIniciais(prev => prev.filter(i => i.id !== ideia.id));
     setProcessandoAcao(ideia.id);
     try {
-      await fetch('/api/notion', { 
-        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, 
-        body: JSON.stringify({ pageId: ideia.id, properties: { "Categoria do Card": { rich_text: [{ text: { content: "PRODUCAO" } }] }, "Fase Atual": { select: { name: fasesDoSistema[0] || "Pesquisa" } } } }) 
-      });
+      await fetch('/api/notion', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: ideia.id, properties: { "Categoria do Card": { rich_text: [{ text: { content: "PRODUCAO" } }] }, "Fase Atual": { select: { name: fasesDoSistema[0] || "Pesquisa" } } } }) });
       await buscarProjetos(true);
     } catch (erro) {} finally { setProcessandoAcao(null); }
   };
@@ -279,8 +275,7 @@ export default function Home() {
           nome: `${nomeAtual} (Cópia)`, fase: projeto.properties?.['Fase Atual']?.select?.name || fasesDoSistema[0],
           prioridade: projeto.properties?.['Prioridade']?.select?.name, link: projeto.properties?.['Link']?.url,
           responsavel: projeto.properties?.['Responsável']?.rich_text?.[0]?.plain_text, observacoes: projeto.properties?.['Observações']?.rich_text?.[0]?.plain_text,
-          canal: projeto.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text, dataAlvo: projeto.properties?.['Data Alvo']?.date?.start, isCalendar: false,
-          workspace: workspaceAtual
+          canal: projeto.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text, dataAlvo: projeto.properties?.['Data Alvo']?.date?.start, isCalendar: false, workspace: workspaceAtual
         })
       });
       await buscarProjetos(true);
@@ -308,16 +303,16 @@ export default function Home() {
     e.stopPropagation();
     const vaiRodar = statusAtual === "Parado";
     const nomeColunaTempo = `Tempo ${fase}`;
-    const agora = Date.now();
+    const agoraSincronizado = Date.now() + clockOffset; 
     let novoTempoTotal = tempoAcumuladoAnterior;
     
-    bloqueiosLocais.current[projetoId] = agora; // Reforça o escudo
+    bloqueiosLocais.current[projetoId] = Date.now(); 
 
     if (vaiRodar) { 
-      setTimersLocais(prev => ({ ...prev, [projetoId]: { inicio: agora, acumulado: tempoAcumuladoAnterior } })); 
+      setTimersLocais(prev => ({ ...prev, [projetoId]: { inicio: agoraSincronizado, acumulado: tempoAcumuladoAnterior } })); 
     } else {
-      const inicioReal = timersLocais[projetoId]?.inicio || (ultimoInicioISO ? new Date(ultimoInicioISO).getTime() : agora);
-      const decorrido = Math.floor((agora - inicioReal) / 1000);
+      const inicioReal = timersLocais[projetoId]?.inicio || (ultimoInicioISO ? new Date(ultimoInicioISO).getTime() : agoraSincronizado);
+      const decorrido = Math.floor((agoraSincronizado - inicioReal) / 1000);
       novoTempoTotal = tempoAcumuladoAnterior + (decorrido > 0 ? decorrido : 0);
       setTimersLocais(prev => { const copy = { ...prev }; delete copy[projetoId]; return copy; });
     }
@@ -326,13 +321,13 @@ export default function Home() {
       if (p.id === projetoId) {
         const pClone = JSON.parse(JSON.stringify(p));
         pClone.properties["Status do Relógio"] = { select: { name: vaiRodar ? "Rodando" : "Parado" } };
-        pClone.properties["Último Início"] = vaiRodar ? { date: { start: new Date(agora).toISOString() } } : null;
+        pClone.properties["Último Início"] = vaiRodar ? { date: { start: new Date(agoraSincronizado).toISOString() } } : null;
         if (!vaiRodar) pClone.properties[nomeColunaTempo] = { number: novoTempoTotal };
         return pClone;
       } return p;
     }));
 
-    try { await fetch('/api/notion', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: projetoId, properties: { "Status do Relógio": { select: { name: vaiRodar ? "Rodando" : "Parado" } }, "Último Início": vaiRodar ? { date: { start: new Date(agora).toISOString() } } : null, ...( !vaiRodar && { [nomeColunaTempo]: { number: novoTempoTotal } } ) } }) }); } catch (erro) {}
+    try { await fetch('/api/notion', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: projetoId, properties: { "Status do Relógio": { select: { name: vaiRodar ? "Rodando" : "Parado" } }, "Último Início": vaiRodar ? { date: { start: new Date(agoraSincronizado).toISOString() } } : null, ...( !vaiRodar && { [nomeColunaTempo]: { number: novoTempoTotal } } ) } }) }); } catch (erro) {}
   };
 
   const renderizarPainel = () => {
@@ -343,18 +338,19 @@ export default function Home() {
     
     const statusRelogio = projetoSelecionado.properties?.['Status do Relógio']?.select?.name || "Parado";
     const rodando = statusRelogio === "Rodando";
+    const horaReal = horaAtual + clockOffset;
 
-    // Cálculo exato e em tempo real para a barra lateral
     let tempoTotal = 0;
     const temposPorFase = fasesDoSistema.map(fase => {
       let tempoFase = projetoSelecionado.properties?.[`Tempo ${fase}`]?.number || 0;
       if (fase === faseAtual && rodando) {
          if (timersLocais[projetoSelecionado.id]) {
-            tempoFase = timersLocais[projetoSelecionado.id].acumulado + Math.floor((horaAtual - timersLocais[projetoSelecionado.id].inicio) / 1000);
+            tempoFase = timersLocais[projetoSelecionado.id].acumulado + Math.floor((horaReal - timersLocais[projetoSelecionado.id].inicio) / 1000);
          } else if (projetoSelecionado.properties?.['Último Início']?.date?.start) {
-            tempoFase += Math.floor((horaAtual - new Date(projetoSelecionado.properties['Último Início'].date.start).getTime()) / 1000);
+            tempoFase += Math.floor((horaReal - new Date(projetoSelecionado.properties['Último Início'].date.start).getTime()) / 1000);
          }
       }
+      if (tempoFase < 0) tempoFase = 0;
       tempoTotal += tempoFase;
       return { fase, tempoFase };
     });
@@ -405,7 +401,7 @@ export default function Home() {
           <div className="flex flex-wrap items-center gap-1.5">
             {fasesDoSistema.map(fase => (
               <div key={fase} className={`group relative flex items-center pl-2.5 pr-1 py-1 border rounded-lg transition-colors cursor-pointer ${faseAtual === fase ? 'bg-indigo-500/20 border-indigo-500/50' : 'bg-black/40 border-white/10 hover:bg-white/5'}`}>
-                <button onClick={() => atualizarPropriedade('Fase Atual', 'select', fase)} className={`text-xs font-bold mr-1 ${faseAtual === fase ? 'text-indigo-400' : 'text-gray-400 group-hover:text-white'}`}>{fase}</button>
+                <button onClick={() => { if(faseAtual !== fase) atualizarPropriedade('Fase Atual', 'select', fase) }} className={`text-xs font-bold mr-1 ${faseAtual === fase ? 'text-indigo-400' : 'text-gray-400 group-hover:text-white'}`}>{fase}</button>
                 <button onClick={(e) => { e.stopPropagation(); setModalExclusao({ ativo: true, fase }); }} className="p-0.5 rounded opacity-100 md:opacity-0 md:group-hover:opacity-100 text-gray-500 hover:text-red-400"><X className="w-3 h-3" /></button>
               </div>
             ))}
@@ -490,7 +486,6 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#050505] text-gray-100 p-4 md:p-6 font-sans overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#050505] to-[#050505]" onClick={() => setMenuAberto(null)}>
       
-      {/* MODAIS (Calendário e Exclusão de Fase) */}
       {addCalendarioDia && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm px-4" onClick={() => setAddCalendarioDia(null)}>
           <div onClick={e => e.stopPropagation()} className="bg-[#1a1a1a] border border-white/20 p-5 rounded-2xl shadow-2xl animate-in zoom-in-95 max-w-[300px] w-full">
@@ -523,7 +518,6 @@ export default function Home() {
 
       <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         
-        {/* HEADER */}
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-4 border-b border-white/10">
           <div>
             <button onClick={() => setWorkspaceAtual(null)} className="flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-indigo-400 transition-colors mb-3"><ArrowLeft className="w-3.5 h-3.5"/> Voltar aos Workspaces</button>
@@ -550,7 +544,6 @@ export default function Home() {
           )}
         </header>
 
-        {/* VITRINE DE LANÇAMENTOS */}
         <section className="bg-[#0f0f0f] p-4 rounded-2xl border border-white/5 shadow-inner">
           <h2 className="text-[10px] font-bold text-indigo-400 mb-4 uppercase tracking-widest flex items-center gap-2"><CalendarDays className="w-4 h-4"/> Lançamentos - {workspaceAtual}</h2>
           
@@ -593,7 +586,6 @@ export default function Home() {
           </div>
         </section>
 
-        {/* BARRA DE CRIAÇÃO */}
         <section className="bg-white/5 backdrop-blur-xl p-2 pr-2 md:p-2.5 md:pr-2.5 rounded-xl border border-white/10 flex gap-2 w-full shadow-lg focus-within:border-indigo-500/50 transition-all">
           <input type="text" value={nomeNovoProjeto} onChange={(e) => setNomeNovoProjeto(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleCriarProjeto()} placeholder={`Criar novo vídeo em ${workspaceAtual}...`} disabled={criandoProjeto} className="flex-1 bg-transparent px-3 text-white font-bold placeholder-gray-600 focus:outline-none text-sm disabled:opacity-50" />
           <button onClick={handleCriarProjeto} disabled={criandoProjeto || !nomeNovoProjeto.trim()} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 min-w-[100px] shadow-lg shadow-indigo-500/20 disabled:opacity-50 transition-all">
@@ -601,7 +593,6 @@ export default function Home() {
           </button>
         </section>
 
-        {/* LINHA DE MONTAGEM */}
         <section>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
             <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2"><Activity className="w-4 h-4"/> Linha de Montagem - {workspaceAtual}</h2>
@@ -636,8 +627,13 @@ export default function Home() {
                 const urgente = prioridade === "Urgente" || alerta;
                 
                 let tempoParaExibir = projeto.properties?.[`Tempo ${faseAtual}`]?.number || 0;
-                if (timersLocais[projeto.id]) { tempoParaExibir = timersLocais[projeto.id].acumulado + Math.floor((horaAtual - timersLocais[projeto.id].inicio) / 1000); } 
-                else if (rodando && projeto.properties?.['Último Início']?.date?.start) { tempoParaExibir += Math.floor((horaAtual - new Date(projeto.properties['Último Início'].date.start).getTime()) / 1000); }
+                const horaReal = horaAtual + clockOffset;
+                if (timersLocais[projeto.id]) { 
+                   tempoParaExibir = timersLocais[projeto.id].acumulado + Math.floor((horaReal - timersLocais[projeto.id].inicio) / 1000); 
+                } else if (rodando && projeto.properties?.['Último Início']?.date?.start) { 
+                   tempoParaExibir += Math.floor((horaReal - new Date(projeto.properties['Último Início'].date.start).getTime()) / 1000); 
+                }
+                if (tempoParaExibir < 0) tempoParaExibir = 0;
 
                 const totalFases = fasesDoSistema.length || 1;
                 const indiceFase = fasesDoSistema.indexOf(faseAtual);
@@ -659,7 +655,6 @@ export default function Home() {
                             </div>
                           )}
                         </div>
-                        {/* BOTÃO DOS 3 PONTINHOS E SEU MENU BLINDADO CONTRA VAZAMENTO */}
                         <div className="relative">
                           <button onClick={(e) => { e.stopPropagation(); toggleMenu(projeto.id); }} className="text-gray-500 hover:text-white p-1 bg-white/5 rounded-md opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"><MoreHorizontal className="w-4 h-4" /></button>
                           {menuAberto === projeto.id && (
@@ -679,7 +674,6 @@ export default function Home() {
                         {editandoId === projeto.id ? (
                           <input type="text" autoFocus value={nomeEditado} onChange={(e) => setNomeEditado(e.target.value)} onBlur={() => salvarEdicaoNome(projeto.id)} onKeyDown={(e) => { if(e.key === 'Enter') salvarEdicaoNome(projeto.id) }} onClick={(e) => e.stopPropagation()} className="w-full bg-black/50 text-white text-sm font-bold border border-indigo-500/50 rounded px-1.5 py-0.5 outline-none shadow-lg mt-1" />
                         ) : (
-                          // TÍTULO COM SUPER DESTAQUE VISUAL
                           <h3 className={`font-extrabold text-lg md:text-xl leading-tight line-clamp-2 mt-1.5 mb-1 ${isFinalPhase ? 'text-gray-400' : 'text-white'}`}>{nome}</h3>
                         )}
                       </div>
@@ -715,7 +709,6 @@ export default function Home() {
         </section>
       </div>
 
-      {/* GAVETAS LATERAIS */}
       {painelAberto && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity" onClick={() => setPainelAberto(false)}></div>}
       <aside className={`fixed top-0 right-0 h-full w-full md:w-[420px] bg-[#0c0c0c]/95 backdrop-blur-2xl border-l border-white/10 z-40 transform transition-transform duration-300 shadow-[-30px_0_60px_rgba(0,0,0,0.7)] flex flex-col ${painelAberto ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="flex items-center justify-between p-5 border-b border-white/5 bg-white/5">
