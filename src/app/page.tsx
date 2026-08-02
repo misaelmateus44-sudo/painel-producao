@@ -31,13 +31,18 @@ export default function Home() {
   const [menuAberto, setMenuAberto] = useState<string | null>(null);
   const [painelAberto, setPainelAberto] = useState<boolean>(false);
   const [gavetaIdeiasAberta, setGavetaIdeiasAberta] = useState<boolean>(false);
-  const [projetoSelecionado, setProjetoSelecionado] = useState<any>(null);
+  
+  // ARQUITETURA DE ELITE: Em vez de clonar, guardamos apenas o ID. O painel espelha o estado principal perfeitamente.
+  const [projetoSelecionadoId, setProjetoSelecionadoId] = useState<string | null>(null);
   
   const [projetosIniciais, setProjetosIniciais] = useState<any[]>([]);
   const [calendarioInicial, setCalendarioInicial] = useState<any[]>([]);
   const [ideiasIniciais, setIdeiasIniciais] = useState<any[]>([]);
   const [fasesDoSistema, setFasesDoSistema] = useState<string[]>([]);
   
+  // O Espelho Automático
+  const projetoSelecionado = projetosIniciais.find(p => p.id === projetoSelecionadoId) || null;
+
   const [carregando, setCarregando] = useState(true);
   const [nomeNovoProjeto, setNomeNovoProjeto] = useState("");
   const [novaIdeiaTitulo, setNovaIdeiaTitulo] = useState("");
@@ -45,7 +50,7 @@ export default function Home() {
   const [processandoAcao, setProcessandoAcao] = useState<string | null>(null);
 
   const [horaAtual, setHoraAtual] = useState(Date.now());
-  const [clockOffset, setClockOffset] = useState<number>(0); // NOVO: Escudo Anti-Drift do Relógio
+  const [clockOffset, setClockOffset] = useState<number>(0); 
   const [timersLocais, setTimersLocais] = useState<Record<string, { inicio: number, acumulado: number }>>({});
   const bloqueiosLocais = useRef<Record<string, number>>({});
   
@@ -84,7 +89,6 @@ export default function Home() {
       const resposta = await fetch('/api/notion', { cache: 'no-store' });
       const dados = await resposta.json();
       
-      // Ajusta o relógio interno para sincronia perfeita com o Servidor (Acaba com os saltos)
       if (dados.serverTime) setClockOffset(dados.serverTime - Date.now());
       
       const agora = Date.now();
@@ -101,13 +105,6 @@ export default function Home() {
       setCalendarioInicial(prev => aplicarEscudo(prev, dados.calendario));
       setIdeiasIniciais(dados.ideias || []);
       setFasesDoSistema(dados.fases || []);
-      
-      setProjetoSelecionado((prev: any) => {
-        if (!prev) return null;
-        const incoming = (dados.projetos || []).find((p: any) => p.id === prev.id);
-        const travadoEm = bloqueiosLocais.current[prev.id];
-        return (travadoEm && (agora - travadoEm < 20000)) ? prev : (incoming || prev);
-      });
     } catch (erro) {} finally { 
       if (!modoSilencioso) setCarregando(false); 
     }
@@ -126,18 +123,12 @@ export default function Home() {
   const ideias = workspaceAtual ? ideiasIniciais.filter((i: any) => i.properties?.Workspace?.select?.name === workspaceAtual || (!i.properties?.Workspace?.select?.name && workspaceAtual === "Geral")) : [];
 
   const lidarComEntradaWorkspace = (nome: string) => { setWorkspaceAtual(nome); setFiltroAtivo(null); };
-  const criarNovoWorkspaceVirtual = () => { if (!novoWorkspaceNome.trim()) return; setWorkspaceAtual(novoWorkspaceNome.trim()); setNovoWorkspaceNome(""); };
 
-  useEffect(() => {
-    if (projetoSelecionado) {
-      setTextoObservacao(projetoSelecionado.properties?.['Observações']?.rich_text?.[0]?.plain_text || "");
-      setTextoLink(projetoSelecionado.properties?.['Link']?.url || "");
-      setTextoResponsavel(projetoSelecionado.properties?.['Responsável']?.rich_text?.[0]?.plain_text || "");
-      setTextoCanal(projetoSelecionado.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text || "");
-      const alvoBruto = projetoSelecionado.properties?.['Data Alvo']?.date?.start;
-      setDataAlvoVisivel(alvoBruto ? `${alvoBruto.split('T')[0].split('-')[2]}/${alvoBruto.split('T')[0].split('-')[1]}` : "");
-    }
-  }, [projetoSelecionado]);
+  const criarNovoWorkspaceVirtual = () => {
+    if (!novoWorkspaceNome.trim()) return;
+    setWorkspaceAtual(novoWorkspaceNome.trim());
+    setNovoWorkspaceNome("");
+  };
 
   const atualizarPropriedade = async (propriedade: string, tipo: string, valor: any, projId?: string) => {
     const idAlvo = projId || (projetoSelecionado ? projetoSelecionado.id : null);
@@ -149,7 +140,6 @@ export default function Home() {
     let oldFase = "";
 
     const pAtual = projetosIniciais.find(p => p.id === idAlvo);
-    // Escudo de Auto-Pause (Impede pular o tempo se você mudar a fase com relógio rodando)
     if (pAtual && propriedade === 'Fase Atual' && pAtual.properties?.['Status do Relógio']?.select?.name === 'Rodando') {
       autoPaused = true;
       oldFase = pAtual.properties?.['Fase Atual']?.select?.name || fasesDoSistema[0];
@@ -182,7 +172,6 @@ export default function Home() {
     };
     
     setProjetosIniciais(prev => prev.map((p: any) => p.id === idAlvo ? atualizaLocal(p) : p));
-    if (projetoSelecionado && projetoSelecionado.id === idAlvo) setProjetoSelecionado(atualizaLocal(projetoSelecionado));
 
     let formatoNotion: any = {};
     if (tipo === 'rich_text') formatoNotion = { rich_text: [{ text: { content: valor } }] };
@@ -247,7 +236,17 @@ export default function Home() {
   const toggleMenu = (id: string) => { setMenuAberto(menuAberto === id ? null : id); };
   const iniciarEdicaoNome = (e: React.MouseEvent, projetoId: string, nomeAtual: string) => { e.stopPropagation(); setMenuAberto(null); setEditandoId(projetoId); setNomeEditado(nomeAtual); };
   const salvarEdicaoNome = (projetoId: string) => { setEditandoId(null); if (!nomeEditado.trim()) return; atualizarPropriedade('Nome', 'title', nomeEditado, projetoId); };
-  const abrirPainel = (projeto: any) => { setProjetoSelecionado(projeto); setPainelAberto(true); };
+  
+  const abrirPainel = (projeto: any) => { 
+    setProjetoSelecionadoId(projeto.id); 
+    setPainelAberto(true); 
+    setTextoObservacao(projeto.properties?.['Observações']?.rich_text?.[0]?.plain_text || "");
+    setTextoLink(projeto.properties?.['Link']?.url || "");
+    setTextoResponsavel(projeto.properties?.['Responsável']?.rich_text?.[0]?.plain_text || "");
+    setTextoCanal(projeto.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text || "");
+    const alvoBruto = projeto.properties?.['Data Alvo']?.date?.start;
+    setDataAlvoVisivel(alvoBruto ? `${alvoBruto.split('T')[0].split('-')[2]}/${alvoBruto.split('T')[0].split('-')[1]}` : "");
+  };
 
   const salvarNovaFase = async () => {
     if (!nomeNovaFase.trim()) return;
@@ -431,7 +430,6 @@ export default function Home() {
     );
   };
 
-  // === TELA 1: LOBBY DE WORKSPACES ===
   if (workspaceAtual === null) {
     return (
       <main className="min-h-screen bg-[#050505] flex flex-col items-center justify-center p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050505] to-[#050505]">
@@ -472,7 +470,6 @@ export default function Home() {
     );
   }
 
-  // === TELA 2: MESA DE COMANDO DO PROJETO ===
   const canaisAtivos = Array.from(new Set(projetos.map((p: any) => p.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text).filter(Boolean)));
   const responsaveisAtivos = Array.from(new Set(projetos.map((p: any) => p.properties?.['Responsável']?.rich_text?.[0]?.plain_text).filter(Boolean)));
   
@@ -663,7 +660,8 @@ export default function Home() {
                               <button onClick={(e) => handleDuplicarProjeto(e, projeto)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded-lg"><Copy className="w-3.5 h-3.5" /> Duplicar</button>
                               <button onClick={(e) => handleZerarTempo(e, projeto.id, faseAtual)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg"><RotateCcw className="w-3.5 h-3.5" /> Zerar Relógio</button>
                               <div className="h-[1px] bg-white/10 my-1"></div>
-                              <button onClick={(e) => { e.stopPropagation(); setMenuAberto(null); handleDeletarCard(projeto.id); }} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg"><Trash2 className="w-3.5 h-3.5" /> Deletar</button>
+                              {/* BLOQUEIO DO CLIQUE QUE ABRIA A BARRA LATERAL */}
+                              <button onClick={(e) => { e.stopPropagation(); setMenuAberto(null); setPainelAberto(false); handleDeletarCard(projeto.id); }} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg"><Trash2 className="w-3.5 h-3.5" /> Deletar</button>
                             </div>
                           )}
                         </div>
