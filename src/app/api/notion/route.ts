@@ -26,15 +26,14 @@ export async function GET() {
     const data = await response.json();
     const pages = data.results || [];
     
-    // Organiza os cards retornados do banco
     const projetos = pages.filter((p: any) => !p.properties['Categoria do Card']?.rich_text?.[0]?.plain_text || p.properties['Categoria do Card']?.rich_text?.[0]?.plain_text === 'PRODUCAO');
     const calendario = pages.filter((p: any) => p.properties['Categoria do Card']?.rich_text?.[0]?.plain_text === 'AGENDAMENTO');
     const ideias = pages.filter((p: any) => p.properties['Categoria do Card']?.rich_text?.[0]?.plain_text === 'IDEIA');
 
-    // Fases padrão do sistema
     const fases = ["Pesquisa", "Roteiro", "Gravação", "Edição", "Revisão", "Capa", "Postado"];
 
-    return NextResponse.json({ projetos, calendario, ideias, fases });
+    // A MÁGICA DO TEMPO: Enviando a hora absoluta do servidor para evitar conflitos de relógio
+    return NextResponse.json({ projetos, calendario, ideias, fases, serverTime: Date.now() });
   } catch (error) {
     return NextResponse.json({ error: 'Erro ao buscar dados do Notion' }, { status: 500 });
   }
@@ -43,15 +42,9 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    
-    let properties: any = {
-      "Nome": { title: [{ text: { content: body.nome || "Novo Item" } }] }
-    };
+    let properties: any = { "Nome": { title: [{ text: { content: body.nome || "Novo Item" } }] } };
 
-    // A MÁGICA DO WORKSPACE (Carimba o projeto pai)
-    if (body.workspace) {
-      properties["Workspace"] = { select: { name: body.workspace } };
-    }
+    if (body.workspace) properties["Workspace"] = { select: { name: body.workspace } };
 
     if (body.isCalendar) {
       properties["Categoria do Card"] = { rich_text: [{ text: { content: "AGENDAMENTO" } }] };
@@ -72,39 +65,22 @@ export async function POST(request: Request) {
     }
 
     const response = await fetch('https://api.notion.com/v1/pages', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        parent: { database_id: NOTION_VIDEOS_DB_ID },
-        properties
-      })
+      method: 'POST', headers, body: JSON.stringify({ parent: { database_id: NOTION_VIDEOS_DB_ID }, properties })
     });
-
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (error) {
-    return NextResponse.json({ error: 'Erro ao criar item' }, { status: 500 });
-  }
+  } catch (error) { return NextResponse.json({ error: 'Erro ao criar item' }, { status: 500 }); }
 }
 
 export async function PATCH(request: Request) {
   try {
     const body = await request.json();
     const { pageId, properties, archived } = body;
-    
     const payload: any = {};
     if (properties) payload.properties = properties;
     if (archived !== undefined) payload.archived = archived;
-
-    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, {
-      method: 'PATCH',
-      headers,
-      body: JSON.stringify(payload)
-    });
-
+    const response = await fetch(`https://api.notion.com/v1/pages/${pageId}`, { method: 'PATCH', headers, body: JSON.stringify(payload) });
     const data = await response.json();
     return NextResponse.json(data);
-  } catch (error) {
-    return NextResponse.json({ error: 'Erro ao atualizar item' }, { status: 500 });
-  }
+  } catch (error) { return NextResponse.json({ error: 'Erro ao atualizar item' }, { status: 500 }); }
 }
