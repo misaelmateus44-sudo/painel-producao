@@ -111,7 +111,7 @@ export default function Home() {
 
   useEffect(() => { buscarProjetos(); }, []);
 
-  // Extrair Workspaces Únicos e corrigir os erros do TypeScript
+  // Extrair Workspaces Únicos
   const workspacesSet = new Set<string>();
   projetosIniciais.forEach((p: any) => p.properties?.Workspace?.select?.name && workspacesSet.add(p.properties.Workspace.select.name));
   calendarioInicial.forEach((c: any) => c.properties?.Workspace?.select?.name && workspacesSet.add(c.properties.Workspace.select.name));
@@ -237,7 +237,7 @@ export default function Home() {
 
   const abrirPainel = (projeto: any) => { setProjetoSelecionado(projeto); setPainelAberto(true); };
 
-  // TELA 1: LOBBY DE WORKSPACES
+  // === TELA 1: LOBBY DE WORKSPACES ===
   if (workspaceAtual === null) {
     return (
       <main className="min-h-screen bg-[#050505] flex flex-col items-center justify-center p-6 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/20 via-[#050505] to-[#050505]">
@@ -278,7 +278,7 @@ export default function Home() {
     );
   }
 
-  // TELA 2: MESA DE COMANDO DO PROJETO (ISOLADA)
+  // === TELA 2: MESA DE COMANDO DO PROJETO ===
   const canaisAtivos = Array.from(new Set(projetos.map((p: any) => p.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text).filter(Boolean)));
   const responsaveisAtivos = Array.from(new Set(projetos.map((p: any) => p.properties?.['Responsável']?.rich_text?.[0]?.plain_text).filter(Boolean)));
   
@@ -292,6 +292,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#050505] text-gray-100 p-4 md:p-6 font-sans overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#050505] to-[#050505]" onClick={() => setMenuAberto(null)}>
       
+      {/* MODAL DE CALENDÁRIO */}
       {addCalendarioDia && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm px-4" onClick={() => setAddCalendarioDia(null)}>
           <div onClick={e => e.stopPropagation()} className="bg-[#1a1a1a] border border-white/20 p-5 rounded-2xl shadow-2xl animate-in zoom-in-95 max-w-[300px] w-full">
@@ -311,6 +312,7 @@ export default function Home() {
 
       <div className="max-w-7xl mx-auto space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
         
+        {/* HEADER */}
         <header className="flex flex-col md:flex-row md:items-end justify-between gap-4 pb-4 border-b border-white/10">
           <div>
             <button onClick={() => setWorkspaceAtual(null)} className="flex items-center gap-1.5 text-xs font-bold text-gray-500 hover:text-indigo-400 transition-colors mb-3"><ArrowLeft className="w-3.5 h-3.5"/> Voltar aos Workspaces</button>
@@ -337,13 +339,7 @@ export default function Home() {
           )}
         </header>
 
-        <section className="bg-white/5 backdrop-blur-xl p-2 pr-2 md:p-2.5 md:pr-2.5 rounded-xl border border-white/10 flex gap-2 w-full md:w-2/3 lg:w-1/2 shadow-lg focus-within:border-indigo-500/50 transition-all">
-          <input type="text" value={nomeNovoProjeto} onChange={(e) => setNomeNovoProjeto(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleCriarProjeto()} placeholder={`Criar novo vídeo em ${workspaceAtual}...`} disabled={criandoProjeto} className="flex-1 bg-transparent px-3 text-white font-bold placeholder-gray-600 focus:outline-none text-sm disabled:opacity-50" />
-          <button onClick={handleCriarProjeto} disabled={criandoProjeto || !nomeNovoProjeto.trim()} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 min-w-[100px] shadow-lg shadow-indigo-500/20 disabled:opacity-50 transition-all">
-            {criandoProjeto ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Plus className="w-3.5 h-3.5" /><span>Criar</span></>}
-          </button>
-        </section>
-
+        {/* VITRINE DE LANÇAMENTOS */}
         <section className="bg-[#0f0f0f] p-4 rounded-2xl border border-white/5 shadow-inner">
           <h2 className="text-[10px] font-bold text-indigo-400 mb-4 uppercase tracking-widest flex items-center gap-2"><CalendarDays className="w-4 h-4"/> Lançamentos - {workspaceAtual}</h2>
           
@@ -382,6 +378,15 @@ export default function Home() {
           </div>
         </section>
 
+        {/* BARRA DE CRIAÇÃO MOVIDA PARA BAIXO DO CALENDÁRIO */}
+        <section className="bg-white/5 backdrop-blur-xl p-2 pr-2 md:p-2.5 md:pr-2.5 rounded-xl border border-white/10 flex gap-2 w-full shadow-lg focus-within:border-indigo-500/50 transition-all">
+          <input type="text" value={nomeNovoProjeto} onChange={(e) => setNomeNovoProjeto(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleCriarProjeto()} placeholder={`Criar novo vídeo em ${workspaceAtual}...`} disabled={criandoProjeto} className="flex-1 bg-transparent px-3 text-white font-bold placeholder-gray-600 focus:outline-none text-sm disabled:opacity-50" />
+          <button onClick={handleCriarProjeto} disabled={criandoProjeto || !nomeNovoProjeto.trim()} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 min-w-[100px] shadow-lg shadow-indigo-500/20 disabled:opacity-50 transition-all">
+            {criandoProjeto ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <><Plus className="w-3.5 h-3.5" /><span>Criar</span></>}
+          </button>
+        </section>
+
+        {/* LINHA DE MONTAGEM */}
         <section>
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-4">
             <h2 className="text-[10px] font-bold text-gray-500 uppercase tracking-widest flex items-center gap-2"><Activity className="w-4 h-4"/> Linha de Montagem - {workspaceAtual}</h2>
