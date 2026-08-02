@@ -88,7 +88,8 @@ export default function Home() {
         const prevMap = new Map(prev.map((p: any) => [p.id, p]));
         return (novos || []).map((p: any) => {
           const travadoEm = bloqueiosLocais.current[p.id];
-          if (travadoEm && (agora - travadoEm < 15000)) return prevMap.get(p.id) || p;
+          // Escudo de 20s para garantir que o Notion salvou o pause
+          if (travadoEm && (agora - travadoEm < 20000)) return prevMap.get(p.id) || p;
           return p;
         });
       };
@@ -102,7 +103,7 @@ export default function Home() {
         if (!prev) return null;
         const incoming = (dados.projetos || []).find((p: any) => p.id === prev.id);
         const travadoEm = bloqueiosLocais.current[prev.id];
-        return (travadoEm && (agora - travadoEm < 15000)) ? prev : (incoming || prev);
+        return (travadoEm && (agora - travadoEm < 20000)) ? prev : (incoming || prev);
       });
     } catch (erro) {} finally { 
       if (!modoSilencioso) setCarregando(false); 
@@ -145,6 +146,25 @@ export default function Home() {
     if (!idAlvo) return;
     bloqueiosLocais.current[idAlvo] = Date.now();
 
+    let autoPaused = false;
+    let tempoDecorrer = 0;
+    let oldFase = "";
+
+    // Lógica de Auto-Pause se mudar de fase com o relógio rodando
+    const pAtual = projetosIniciais.find(p => p.id === idAlvo);
+    if (pAtual && propriedade === 'Fase Atual' && pAtual.properties?.['Status do Relógio']?.select?.name === 'Rodando') {
+      autoPaused = true;
+      oldFase = pAtual.properties?.['Fase Atual']?.select?.name || fasesDoSistema[0];
+      const inicioIso = pAtual.properties?.['Último Início']?.date?.start;
+      const acumuladoAntigo = pAtual.properties?.[`Tempo ${oldFase}`]?.number || 0;
+      
+      const inicioReal = timersLocais[idAlvo]?.inicio || (inicioIso ? new Date(inicioIso).getTime() : Date.now());
+      const decorrido = Math.floor((Date.now() - inicioReal) / 1000);
+      tempoDecorrer = acumuladoAntigo + (decorrido > 0 ? decorrido : 0);
+      
+      setTimersLocais(prev => { const copy = { ...prev }; delete copy[idAlvo]; return copy; });
+    }
+
     const atualizaLocal = (p: any) => {
       const pClone = JSON.parse(JSON.stringify(p));
       if (!pClone.properties[propriedade]) pClone.properties[propriedade] = {};
@@ -153,6 +173,12 @@ export default function Home() {
       if (tipo === 'url') pClone.properties[propriedade] = { url: valor || null };
       if (tipo === 'select') pClone.properties[propriedade] = valor ? { select: { name: valor } } : null;
       if (tipo === 'date') pClone.properties[propriedade] = valor ? { date: { start: valor } } : null;
+      
+      if (autoPaused) {
+         pClone.properties["Status do Relógio"] = { select: { name: "Parado" } };
+         pClone.properties["Último Início"] = null;
+         pClone.properties[`Tempo ${oldFase}`] = { number: tempoDecorrer };
+      }
       return pClone;
     };
     
@@ -166,7 +192,14 @@ export default function Home() {
     if (tipo === 'select') formatoNotion = valor ? { select: { name: valor } } : null;
     if (tipo === 'date') formatoNotion = valor ? { date: { start: valor } } : null;
 
-    try { await fetch('/api/notion', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: idAlvo, properties: { [propriedade]: formatoNotion } }) }); } catch (erro) {}
+    let propertiesToUpdate: any = { [propriedade]: formatoNotion };
+    if (autoPaused) {
+       propertiesToUpdate["Status do Relógio"] = { select: { name: "Parado" } };
+       propertiesToUpdate["Último Início"] = null;
+       propertiesToUpdate[`Tempo ${oldFase}`] = { number: tempoDecorrer };
+    }
+
+    try { await fetch('/api/notion', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: idAlvo, properties: propertiesToUpdate }) }); } catch (erro) {}
   };
 
   const handleCriarProjeto = async () => {
@@ -278,7 +311,7 @@ export default function Home() {
     const agora = Date.now();
     let novoTempoTotal = tempoAcumuladoAnterior;
     
-    bloqueiosLocais.current[projetoId] = agora;
+    bloqueiosLocais.current[projetoId] = agora; // Reforça o escudo
 
     if (vaiRodar) { 
       setTimersLocais(prev => ({ ...prev, [projetoId]: { inicio: agora, acumulado: tempoAcumuladoAnterior } })); 
@@ -307,7 +340,24 @@ export default function Home() {
     const nome = projetoSelecionado.properties?.Nome?.title[0]?.plain_text || "Projeto Sem Nome";
     const faseAtual = projetoSelecionado.properties?.['Fase Atual']?.select?.name || fasesDoSistema[0];
     const prioridadeAtual = projetoSelecionado.properties?.['Prioridade']?.select?.name || "Normal";
-    const tempoTotal = fasesDoSistema.reduce((acc, fase) => acc + (projetoSelecionado.properties?.[`Tempo ${fase}`]?.number || 0), 0);
+    
+    const statusRelogio = projetoSelecionado.properties?.['Status do Relógio']?.select?.name || "Parado";
+    const rodando = statusRelogio === "Rodando";
+
+    // Cálculo exato e em tempo real para a barra lateral
+    let tempoTotal = 0;
+    const temposPorFase = fasesDoSistema.map(fase => {
+      let tempoFase = projetoSelecionado.properties?.[`Tempo ${fase}`]?.number || 0;
+      if (fase === faseAtual && rodando) {
+         if (timersLocais[projetoSelecionado.id]) {
+            tempoFase = timersLocais[projetoSelecionado.id].acumulado + Math.floor((horaAtual - timersLocais[projetoSelecionado.id].inicio) / 1000);
+         } else if (projetoSelecionado.properties?.['Último Início']?.date?.start) {
+            tempoFase += Math.floor((horaAtual - new Date(projetoSelecionado.properties['Último Início'].date.start).getTime()) / 1000);
+         }
+      }
+      tempoTotal += tempoFase;
+      return { fase, tempoFase };
+    });
 
     return (
       <div className="flex-1 overflow-y-auto p-5 space-y-4 overflow-x-hidden [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-white/10 hover:[&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full">
@@ -371,10 +421,10 @@ export default function Home() {
         <div>
           <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> Auditoria de Tempo</p>
           <div className="bg-black/40 border border-white/10 rounded-xl p-1.5">
-            {fasesDoSistema.map(fase => (
+            {temposPorFase.map(({ fase, tempoFase }) => (
               <div key={fase} className="flex justify-between items-center p-2 rounded-lg hover:bg-white/5">
                 <span className={`text-[10px] font-bold uppercase ${faseAtual === fase ? 'text-indigo-400' : 'text-gray-500'}`}>{fase}</span>
-                <span className="font-mono text-xs text-gray-400">{formatarTempo(projetoSelecionado.properties?.[`Tempo ${fase}`]?.number || 0)}</span>
+                <span className="font-mono text-xs text-gray-400">{formatarTempo(tempoFase)}</span>
               </div>
             ))}
             <div className="h-[1px] bg-white/5 my-1 mx-2"></div>
@@ -500,7 +550,7 @@ export default function Home() {
           )}
         </header>
 
-        {/* VITRINE DE LANÇAMENTOS (Com a Tag do Canal) */}
+        {/* VITRINE DE LANÇAMENTOS */}
         <section className="bg-[#0f0f0f] p-4 rounded-2xl border border-white/5 shadow-inner">
           <h2 className="text-[10px] font-bold text-indigo-400 mb-4 uppercase tracking-widest flex items-center gap-2"><CalendarDays className="w-4 h-4"/> Lançamentos - {workspaceAtual}</h2>
           
@@ -600,7 +650,7 @@ export default function Home() {
                     <div className="absolute bottom-0 left-0 w-full h-1.5 bg-white/5"><div className={`h-full transition-all duration-500 ease-out ${isFinalPhase ? 'bg-emerald-500 shadow-[0_0_15px_#10b981]' : 'bg-indigo-500 shadow-[0_0_10px_#6366f1]'}`} style={{ width: `${porcentagem}%` }}></div></div>
                     
                     <div className="p-4 flex flex-col h-full z-10">
-                      <div className="flex justify-between items-center mb-2.5">
+                      <div className="flex justify-between items-center mb-1">
                         <div className="flex items-center gap-1.5">
                           {responsavel && (
                             <div className="flex items-center gap-1 bg-white/10 px-2 py-0.5 rounded-full border border-white/5">
@@ -609,7 +659,7 @@ export default function Home() {
                             </div>
                           )}
                         </div>
-                        {/* BOTÃO DOS 3 PONTINHOS RESTAURADO AQUI */}
+                        {/* BOTÃO DOS 3 PONTINHOS E SEU MENU BLINDADO CONTRA VAZAMENTO */}
                         <div className="relative">
                           <button onClick={(e) => { e.stopPropagation(); toggleMenu(projeto.id); }} className="text-gray-500 hover:text-white p-1 bg-white/5 rounded-md opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"><MoreHorizontal className="w-4 h-4" /></button>
                           {menuAberto === projeto.id && (
@@ -618,18 +668,19 @@ export default function Home() {
                               <button onClick={(e) => handleDuplicarProjeto(e, projeto)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded-lg"><Copy className="w-3.5 h-3.5" /> Duplicar</button>
                               <button onClick={(e) => handleZerarTempo(e, projeto.id, faseAtual)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg"><RotateCcw className="w-3.5 h-3.5" /> Zerar Relógio</button>
                               <div className="h-[1px] bg-white/10 my-1"></div>
-                              <button onClick={(e) => handleDeletarCard(projeto.id)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg"><Trash2 className="w-3.5 h-3.5" /> Deletar</button>
+                              <button onClick={(e) => { e.stopPropagation(); setMenuAberto(null); handleDeletarCard(projeto.id); }} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg"><Trash2 className="w-3.5 h-3.5" /> Deletar</button>
                             </div>
                           )}
                         </div>
                       </div>
 
                       <div className="mb-2 flex items-start gap-1.5">
-                        {urgente && <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${isAtrasado ? 'text-red-500 animate-pulse' : 'text-amber-500'}`} />}
+                        {urgente && <AlertTriangle className={`w-4 h-4 shrink-0 mt-2 ${isAtrasado ? 'text-red-500 animate-pulse' : 'text-amber-500'}`} />}
                         {editandoId === projeto.id ? (
-                          <input type="text" autoFocus value={nomeEditado} onChange={(e) => setNomeEditado(e.target.value)} onBlur={() => salvarEdicaoNome(projeto.id)} onKeyDown={(e) => { if(e.key === 'Enter') salvarEdicaoNome(projeto.id) }} onClick={(e) => e.stopPropagation()} className="w-full bg-black/50 text-white text-sm font-bold border border-indigo-500/50 rounded px-1.5 py-0.5 outline-none shadow-lg" />
+                          <input type="text" autoFocus value={nomeEditado} onChange={(e) => setNomeEditado(e.target.value)} onBlur={() => salvarEdicaoNome(projeto.id)} onKeyDown={(e) => { if(e.key === 'Enter') salvarEdicaoNome(projeto.id) }} onClick={(e) => e.stopPropagation()} className="w-full bg-black/50 text-white text-sm font-bold border border-indigo-500/50 rounded px-1.5 py-0.5 outline-none shadow-lg mt-1" />
                         ) : (
-                          <h3 className={`font-bold text-sm md:text-base leading-tight line-clamp-2 ${isFinalPhase ? 'text-gray-400' : 'text-gray-100'}`}>{nome}</h3>
+                          // TÍTULO COM SUPER DESTAQUE VISUAL
+                          <h3 className={`font-extrabold text-lg md:text-xl leading-tight line-clamp-2 mt-1.5 mb-1 ${isFinalPhase ? 'text-gray-400' : 'text-white'}`}>{nome}</h3>
                         )}
                       </div>
                       
@@ -664,7 +715,7 @@ export default function Home() {
         </section>
       </div>
 
-      {/* GAVETAS LATERAIS (O Painel Tático Retornou!) */}
+      {/* GAVETAS LATERAIS */}
       {painelAberto && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity" onClick={() => setPainelAberto(false)}></div>}
       <aside className={`fixed top-0 right-0 h-full w-full md:w-[420px] bg-[#0c0c0c]/95 backdrop-blur-2xl border-l border-white/10 z-40 transform transition-transform duration-300 shadow-[-30px_0_60px_rgba(0,0,0,0.7)] flex flex-col ${painelAberto ? 'translate-x-0' : 'translate-x-full'}`}>
         <div className="flex items-center justify-between p-5 border-b border-white/5 bg-white/5">
