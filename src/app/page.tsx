@@ -32,7 +32,6 @@ export default function Home() {
   const [painelAberto, setPainelAberto] = useState<boolean>(false);
   const [gavetaIdeiasAberta, setGavetaIdeiasAberta] = useState<boolean>(false);
   
-  // ARQUITETURA DE ELITE: Em vez de clonar, guardamos apenas o ID. O painel espelha o estado principal perfeitamente.
   const [projetoSelecionadoId, setProjetoSelecionadoId] = useState<string | null>(null);
   
   const [projetosIniciais, setProjetosIniciais] = useState<any[]>([]);
@@ -40,7 +39,6 @@ export default function Home() {
   const [ideiasIniciais, setIdeiasIniciais] = useState<any[]>([]);
   const [fasesDoSistema, setFasesDoSistema] = useState<string[]>([]);
   
-  // O Espelho Automático
   const projetoSelecionado = projetosIniciais.find(p => p.id === projetoSelecionadoId) || null;
 
   const [carregando, setCarregando] = useState(true);
@@ -51,7 +49,9 @@ export default function Home() {
 
   const [horaAtual, setHoraAtual] = useState(Date.now());
   const [clockOffset, setClockOffset] = useState<number>(0); 
-  const [timersLocais, setTimersLocais] = useState<Record<string, { inicio: number, acumulado: number }>>({});
+  
+  // CORREÇÃO: Agora o estado local sabe EXATAMENTE a qual fase o tempo pertence
+  const [timersLocais, setTimersLocais] = useState<Record<string, { inicio: number, acumulado: number, fase: string }>>({});
   const bloqueiosLocais = useRef<Record<string, number>>({});
   
   const [editandoId, setEditandoId] = useState<string | null>(null);
@@ -96,7 +96,8 @@ export default function Home() {
         const prevMap = new Map(prev.map((p: any) => [p.id, p]));
         return (novos || []).map((p: any) => {
           const travadoEm = bloqueiosLocais.current[p.id];
-          if (travadoEm && (agora - travadoEm < 20000)) return prevMap.get(p.id) || p;
+          // CORREÇÃO: Escudo aumentado para 60 segundos (60000ms) para dar tempo do Notion indexar as mudanças
+          if (travadoEm && (agora - travadoEm < 60000)) return prevMap.get(p.id) || p;
           return p;
         });
       };
@@ -308,7 +309,8 @@ export default function Home() {
     bloqueiosLocais.current[projetoId] = Date.now(); 
 
     if (vaiRodar) { 
-      setTimersLocais(prev => ({ ...prev, [projetoId]: { inicio: agoraSincronizado, acumulado: tempoAcumuladoAnterior } })); 
+      // CORREÇÃO: Agora passamos a 'fase' exata em que o relógio iniciou
+      setTimersLocais(prev => ({ ...prev, [projetoId]: { inicio: agoraSincronizado, acumulado: tempoAcumuladoAnterior, fase } })); 
     } else {
       const inicioReal = timersLocais[projetoId]?.inicio || (ultimoInicioISO ? new Date(ultimoInicioISO).getTime() : agoraSincronizado);
       const decorrido = Math.floor((agoraSincronizado - inicioReal) / 1000);
@@ -343,7 +345,7 @@ export default function Home() {
     const temposPorFase = fasesDoSistema.map(fase => {
       let tempoFase = projetoSelecionado.properties?.[`Tempo ${fase}`]?.number || 0;
       if (fase === faseAtual && rodando) {
-         if (timersLocais[projetoSelecionado.id]) {
+         if (timersLocais[projetoSelecionado.id] && timersLocais[projetoSelecionado.id].fase === fase) {
             tempoFase = timersLocais[projetoSelecionado.id].acumulado + Math.floor((horaReal - timersLocais[projetoSelecionado.id].inicio) / 1000);
          } else if (projetoSelecionado.properties?.['Último Início']?.date?.start) {
             tempoFase += Math.floor((horaReal - new Date(projetoSelecionado.properties['Último Início'].date.start).getTime()) / 1000);
@@ -363,16 +365,16 @@ export default function Home() {
 
         <div className="bg-white/5 border border-white/10 rounded-xl p-3 grid grid-cols-2 gap-3">
           <div>
-            <p className="text-[9px] text-gray-500 uppercase font-bold mb-1 flex items-center gap-1"><Hash className="w-3 h-3"/> Canal</p>
-            <input type="text" value={textoCanal} onChange={(e) => setTextoCanal(e.target.value)} onBlur={() => atualizarPropriedade('Canal de Postagem', 'rich_text', textoCanal)} placeholder="Ex: YouTube..." className="w-full bg-black/40 rounded p-1.5 text-xs font-bold text-indigo-300 focus:outline-none border border-transparent focus:border-indigo-500/50" />
+            <p className="text-[9px] text-fuchsia-400 uppercase font-bold mb-1 flex items-center gap-1"><Hash className="w-3 h-3"/> Canal</p>
+            <input type="text" value={textoCanal} onChange={(e) => setTextoCanal(e.target.value)} onBlur={() => atualizarPropriedade('Canal de Postagem', 'rich_text', textoCanal)} placeholder="Ex: YouTube..." className="w-full bg-fuchsia-500/10 rounded p-1.5 text-xs font-bold text-fuchsia-200 focus:outline-none border border-fuchsia-500/30 focus:border-fuchsia-400 transition-colors" />
+          </div>
+          <div>
+            <p className="text-[9px] text-blue-400 uppercase font-bold mb-1 flex items-center gap-1"><User className="w-3 h-3"/> Responsável</p>
+            <input type="text" value={textoResponsavel} onChange={(e) => setTextoResponsavel(e.target.value)} onBlur={() => atualizarPropriedade('Responsável', 'rich_text', textoResponsavel)} placeholder="Ex: João" className="w-full bg-blue-500/10 rounded p-1.5 text-xs font-bold text-blue-200 focus:outline-none border border-blue-500/30 focus:border-blue-400 transition-colors" />
           </div>
           <div>
             <p className="text-[9px] text-gray-500 uppercase font-bold mb-1 flex items-center gap-1"><Calendar className="w-3 h-3"/> Prazo (DD/MM)</p>
             <input type="text" maxLength={5} placeholder="DD/MM" value={dataAlvoVisivel} onChange={(e) => { let val = e.target.value.replace(/\D/g, ''); if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 4); setDataAlvoVisivel(val); }} onBlur={() => { if (dataAlvoVisivel.length === 5) { const [d, m] = dataAlvoVisivel.split('/'); const anoAtual = new Date().getFullYear(); atualizarPropriedade('Data Alvo', 'date', `${anoAtual}-${m}-${d}`); } else if (!dataAlvoVisivel) { atualizarPropriedade('Data Alvo', 'date', null); } }} className="w-full bg-black/40 rounded p-1.5 text-xs font-bold text-gray-300 focus:outline-none border border-transparent focus:border-indigo-500/50 text-center" />
-          </div>
-          <div>
-            <p className="text-[9px] text-gray-500 uppercase font-bold mb-1 flex items-center gap-1"><User className="w-3 h-3"/> Responsável</p>
-            <input type="text" value={textoResponsavel} onChange={(e) => setTextoResponsavel(e.target.value)} onBlur={() => atualizarPropriedade('Responsável', 'rich_text', textoResponsavel)} placeholder="Ex: João" className="w-full bg-black/40 rounded p-1.5 text-xs font-bold text-gray-300 focus:outline-none border border-transparent focus:border-indigo-500/50" />
           </div>
           <div>
             <p className="text-[9px] text-gray-500 uppercase font-bold mb-1 flex items-center gap-1"><Flame className="w-3 h-3"/> Prioridade</p>
@@ -625,7 +627,9 @@ export default function Home() {
                 
                 let tempoParaExibir = projeto.properties?.[`Tempo ${faseAtual}`]?.number || 0;
                 const horaReal = horaAtual + clockOffset;
-                if (timersLocais[projeto.id]) { 
+                
+                // CORREÇÃO: O relógio só roda visualmente se a fase bater exatamente com a fase atual, evitando conflitos
+                if (timersLocais[projeto.id] && timersLocais[projeto.id].fase === faseAtual) { 
                    tempoParaExibir = timersLocais[projeto.id].acumulado + Math.floor((horaReal - timersLocais[projeto.id].inicio) / 1000); 
                 } else if (rodando && projeto.properties?.['Último Início']?.date?.start) { 
                    tempoParaExibir += Math.floor((horaReal - new Date(projeto.properties['Último Início'].date.start).getTime()) / 1000); 
@@ -643,14 +647,25 @@ export default function Home() {
                     <div className="absolute bottom-0 left-0 w-full h-1.5 bg-white/5"><div className={`h-full transition-all duration-500 ease-out ${isFinalPhase ? 'bg-emerald-500 shadow-[0_0_15px_#10b981]' : 'bg-indigo-500 shadow-[0_0_10px_#6366f1]'}`} style={{ width: `${porcentagem}%` }}></div></div>
                     
                     <div className="p-4 flex flex-col h-full z-10">
-                      <div className="flex justify-between items-center mb-1">
-                        <div className="flex items-center gap-1.5">
-                          {responsavel && (
-                            <div className="flex items-center gap-1 bg-white/10 px-2 py-0.5 rounded-full border border-white/5">
-                              <User className="w-3 h-3 text-indigo-300"/>
-                              <span className="text-[10px] font-bold text-gray-300 truncate max-w-[100px]">{responsavel}</span>
-                            </div>
-                          )}
+                      <div className="flex justify-between items-start mb-1">
+                        <div className="flex flex-col gap-1.5 items-start mt-1">
+                          
+                          {/* DESTAQUE VISUAL: RESPONSÁVEL E CANAL */}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {responsavel && (
+                              <div className="flex items-center gap-1.5 bg-gradient-to-r from-blue-600/20 to-indigo-600/20 px-2 py-0.5 rounded-md border border-blue-500/30 shadow-[0_0_10px_rgba(59,130,246,0.1)]">
+                                <User className="w-3 h-3 text-blue-400"/>
+                                <span className="text-[10px] font-extrabold text-blue-100 truncate max-w-[100px] uppercase tracking-wider">{responsavel}</span>
+                              </div>
+                            )}
+                            {canal && (
+                              <div className="flex items-center gap-1 bg-gradient-to-r from-fuchsia-600/20 to-pink-600/20 px-2 py-0.5 rounded-md border border-fuchsia-500/30 shadow-[0_0_10px_rgba(217,70,239,0.1)]">
+                                <Hash className="w-3 h-3 text-fuchsia-400"/>
+                                <span className="text-[10px] font-extrabold text-fuchsia-100 truncate max-w-[100px] uppercase tracking-wider">{canal}</span>
+                              </div>
+                            )}
+                          </div>
+                          
                         </div>
                         <div className="relative">
                           <button onClick={(e) => { e.stopPropagation(); toggleMenu(projeto.id); }} className="text-gray-500 hover:text-white p-1 bg-white/5 rounded-md opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"><MoreHorizontal className="w-4 h-4" /></button>
@@ -660,7 +675,6 @@ export default function Home() {
                               <button onClick={(e) => handleDuplicarProjeto(e, projeto)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded-lg"><Copy className="w-3.5 h-3.5" /> Duplicar</button>
                               <button onClick={(e) => handleZerarTempo(e, projeto.id, faseAtual)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg"><RotateCcw className="w-3.5 h-3.5" /> Zerar Relógio</button>
                               <div className="h-[1px] bg-white/10 my-1"></div>
-                              {/* BLOQUEIO DO CLIQUE QUE ABRIA A BARRA LATERAL */}
                               <button onClick={(e) => { e.stopPropagation(); setMenuAberto(null); setPainelAberto(false); handleDeletarCard(projeto.id); }} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg"><Trash2 className="w-3.5 h-3.5" /> Deletar</button>
                             </div>
                           )}
@@ -679,9 +693,8 @@ export default function Home() {
                       <div className="flex flex-col gap-1.5 my-auto">
                         <div className="flex items-center gap-1.5 flex-wrap">
                           <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded border ${isFinalPhase ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : rodando ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300' : 'bg-white/5 border-white/10 text-gray-400'}`}>
-                             {rodando && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse shadow-[0_0_8px_#818cf8]"></span>} {faseAtual}
+                              {rodando && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse shadow-[0_0_8px_#818cf8]"></span>} {faseAtual}
                           </span>
-                          {canal && <span className="text-[9px] font-black text-gray-400 bg-white/5 px-1.5 py-0.5 rounded border border-white/5 truncate max-w-[80px]">#{canal}</span>}
                         </div>
                         <div className="flex gap-1.5 mt-1 flex-wrap">
                            {temObservacao && <div title="Anotações" className="p-1 rounded bg-amber-500/10 text-amber-500/80 border border-amber-500/20"><FileText className="w-3 h-3" /></div>}
