@@ -111,7 +111,6 @@ export default function Home() {
 
   useEffect(() => { buscarProjetos(); }, []);
 
-  // Extrair Workspaces Únicos
   const workspacesSet = new Set<string>();
   projetosIniciais.forEach((p: any) => p.properties?.Workspace?.select?.name && workspacesSet.add(p.properties.Workspace.select.name));
   calendarioInicial.forEach((c: any) => c.properties?.Workspace?.select?.name && workspacesSet.add(c.properties.Workspace.select.name));
@@ -188,6 +187,18 @@ export default function Home() {
     } catch (erro) {} finally { setProcessandoAcao(null); }
   };
 
+  const handlePromoverIdeia = async (ideia: any) => {
+    setIdeiasIniciais(prev => prev.filter(i => i.id !== ideia.id));
+    setProcessandoAcao(ideia.id);
+    try {
+      await fetch('/api/notion', { 
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, 
+        body: JSON.stringify({ pageId: ideia.id, properties: { "Categoria do Card": { rich_text: [{ text: { content: "PRODUCAO" } }] }, "Fase Atual": { select: { name: fasesDoSistema[0] || "Pesquisa" } } } }) 
+      });
+      await buscarProjetos(true);
+    } catch (erro) {} finally { setProcessandoAcao(null); }
+  };
+
   const handleAdicionarCalendario = async (data: string) => {
     if (!calTitulo.trim() || !workspaceAtual) return;
     setProcessandoAcao(`add_cal_${data}`);
@@ -202,6 +213,62 @@ export default function Home() {
     setCalendarioInicial(prev => prev.filter((c: any) => c.id !== id));
     setIdeiasIniciais(prev => prev.filter((c: any) => c.id !== id));
     try { await fetch('/api/notion', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: id, archived: true }) }); } catch (erro) {}
+  };
+
+  const toggleMenu = (id: string) => { setMenuAberto(menuAberto === id ? null : id); };
+  const iniciarEdicaoNome = (e: React.MouseEvent, projetoId: string, nomeAtual: string) => { e.stopPropagation(); setMenuAberto(null); setEditandoId(projetoId); setNomeEditado(nomeAtual); };
+  const salvarEdicaoNome = (projetoId: string) => { setEditandoId(null); if (!nomeEditado.trim()) return; atualizarPropriedade('Nome', 'title', nomeEditado, projetoId); };
+  const abrirPainel = (projeto: any) => { setProjetoSelecionado(projeto); setPainelAberto(true); };
+
+  const salvarNovaFase = async () => {
+    if (!nomeNovaFase.trim()) return;
+    const faseFormatada = nomeNovaFase.trim();
+    setFasesDoSistema(prev => [...prev, faseFormatada]);
+    setCriandoFase(false); setNomeNovaFase("");
+    try { await fetch('/api/notion', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ novaFase: faseFormatada }) }); } catch (erro) {}
+  };
+
+  const confirmarExclusaoFase = async () => {
+    const faseParaDeletar = modalExclusao.fase;
+    setModalExclusao({ ativo: false, fase: "" });
+    setFasesDoSistema(prev => prev.filter(f => f !== faseParaDeletar));
+    if (projetoSelecionado && projetoSelecionado.properties['Fase Atual']?.select?.name === faseParaDeletar) { atualizarPropriedade("Fase Atual", "select", fasesDoSistema[0] || "Pesquisa"); }
+    try { await fetch('/api/notion', { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ faseParaDeletar }) }); } catch (erro) {}
+  };
+
+  const handleDuplicarProjeto = async (e: React.MouseEvent, projeto: any) => {
+    e.stopPropagation(); setMenuAberto(null); setProcessandoAcao(projeto.id);
+    const nomeAtual = projeto.properties?.Nome?.title[0]?.plain_text || "Projeto";
+    try {
+      await fetch('/api/notion', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          nome: `${nomeAtual} (Cópia)`, fase: projeto.properties?.['Fase Atual']?.select?.name || fasesDoSistema[0],
+          prioridade: projeto.properties?.['Prioridade']?.select?.name, link: projeto.properties?.['Link']?.url,
+          responsavel: projeto.properties?.['Responsável']?.rich_text?.[0]?.plain_text, observacoes: projeto.properties?.['Observações']?.rich_text?.[0]?.plain_text,
+          canal: projeto.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text, dataAlvo: projeto.properties?.['Data Alvo']?.date?.start, isCalendar: false,
+          workspace: workspaceAtual
+        })
+      });
+      await buscarProjetos(true);
+    } catch (erro) {} finally { setProcessandoAcao(null); }
+  };
+
+  const handleZerarTempo = async (e: React.MouseEvent, projetoId: string, fase: string) => {
+    e.stopPropagation(); setMenuAberto(null); setProcessandoAcao(projetoId);
+    const nomeColunaTempo = `Tempo ${fase}`;
+    bloqueiosLocais.current[projetoId] = Date.now(); 
+    setProjetosIniciais(prev => prev.map(p => {
+      if (p.id === projetoId) {
+        const pClone = JSON.parse(JSON.stringify(p));
+        pClone.properties["Status do Relógio"] = { select: { name: "Parado" } }; 
+        pClone.properties["Último Início"] = null; 
+        pClone.properties[nomeColunaTempo] = { number: 0 }; 
+        return pClone;
+      } return p;
+    }));
+    setTimersLocais(prev => { const copy = { ...prev }; delete copy[projetoId]; return copy; });
+    try { await fetch('/api/notion', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: projetoId, properties: { "Status do Relógio": { select: { name: "Parado" } }, "Último Início": null, [nomeColunaTempo]: { number: 0 } } }) }); } catch (erro) {} finally { setProcessandoAcao(null); }
   };
 
   const handleAlternarRelogio = async (e: React.MouseEvent, projetoId: string, statusAtual: string, fase: string, ultimoInicioISO: string | null, tempoAcumuladoAnterior: number) => {
@@ -235,7 +302,88 @@ export default function Home() {
     try { await fetch('/api/notion', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pageId: projetoId, properties: { "Status do Relógio": { select: { name: vaiRodar ? "Rodando" : "Parado" } }, "Último Início": vaiRodar ? { date: { start: new Date(agora).toISOString() } } : null, ...( !vaiRodar && { [nomeColunaTempo]: { number: novoTempoTotal } } ) } }) }); } catch (erro) {}
   };
 
-  const abrirPainel = (projeto: any) => { setProjetoSelecionado(projeto); setPainelAberto(true); };
+  const renderizarPainel = () => {
+    if (!projetoSelecionado) return null;
+    const nome = projetoSelecionado.properties?.Nome?.title[0]?.plain_text || "Projeto Sem Nome";
+    const faseAtual = projetoSelecionado.properties?.['Fase Atual']?.select?.name || fasesDoSistema[0];
+    const prioridadeAtual = projetoSelecionado.properties?.['Prioridade']?.select?.name || "Normal";
+    const tempoTotal = fasesDoSistema.reduce((acc, fase) => acc + (projetoSelecionado.properties?.[`Tempo ${fase}`]?.number || 0), 0);
+
+    return (
+      <div className="flex-1 overflow-y-auto p-5 space-y-4 overflow-x-hidden [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-transparent [&::-webkit-scrollbar-thumb]:bg-white/10 hover:[&::-webkit-scrollbar-thumb]:bg-white/20 [&::-webkit-scrollbar-thumb]:rounded-full">
+        <div>
+          <p className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-0.5">Detalhes da Produção</p>
+          <h3 className="text-xl font-extrabold text-white leading-tight break-words">{nome}</h3>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-3 grid grid-cols-2 gap-3">
+          <div>
+            <p className="text-[9px] text-gray-500 uppercase font-bold mb-1 flex items-center gap-1"><Hash className="w-3 h-3"/> Canal</p>
+            <input type="text" value={textoCanal} onChange={(e) => setTextoCanal(e.target.value)} onBlur={() => atualizarPropriedade('Canal de Postagem', 'rich_text', textoCanal)} placeholder="Ex: YouTube..." className="w-full bg-black/40 rounded p-1.5 text-xs font-bold text-indigo-300 focus:outline-none border border-transparent focus:border-indigo-500/50" />
+          </div>
+          <div>
+            <p className="text-[9px] text-gray-500 uppercase font-bold mb-1 flex items-center gap-1"><Calendar className="w-3 h-3"/> Prazo (DD/MM)</p>
+            <input type="text" maxLength={5} placeholder="DD/MM" value={dataAlvoVisivel} onChange={(e) => { let val = e.target.value.replace(/\D/g, ''); if (val.length > 2) val = val.substring(0, 2) + '/' + val.substring(2, 4); setDataAlvoVisivel(val); }} onBlur={() => { if (dataAlvoVisivel.length === 5) { const [d, m] = dataAlvoVisivel.split('/'); const anoAtual = new Date().getFullYear(); atualizarPropriedade('Data Alvo', 'date', `${anoAtual}-${m}-${d}`); } else if (!dataAlvoVisivel) { atualizarPropriedade('Data Alvo', 'date', null); } }} className="w-full bg-black/40 rounded p-1.5 text-xs font-bold text-gray-300 focus:outline-none border border-transparent focus:border-indigo-500/50 text-center" />
+          </div>
+          <div>
+            <p className="text-[9px] text-gray-500 uppercase font-bold mb-1 flex items-center gap-1"><User className="w-3 h-3"/> Responsável</p>
+            <input type="text" value={textoResponsavel} onChange={(e) => setTextoResponsavel(e.target.value)} onBlur={() => atualizarPropriedade('Responsável', 'rich_text', textoResponsavel)} placeholder="Ex: João" className="w-full bg-black/40 rounded p-1.5 text-xs font-bold text-gray-300 focus:outline-none border border-transparent focus:border-indigo-500/50" />
+          </div>
+          <div>
+            <p className="text-[9px] text-gray-500 uppercase font-bold mb-1 flex items-center gap-1"><Flame className="w-3 h-3"/> Prioridade</p>
+            <div className="flex bg-black/50 rounded p-0.5">
+              {['Normal', 'Urgente'].map(pri => (
+                <button key={pri} onClick={() => atualizarPropriedade('Prioridade', 'select', pri)} className={`flex-1 text-[10px] py-1 rounded font-bold transition-all ${prioridadeAtual === pri ? (pri === 'Urgente' ? 'bg-red-500/20 text-red-400' : 'bg-indigo-500/20 text-indigo-400') : 'text-gray-500 hover:text-gray-300'}`}>{pri}</button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-3 flex items-center gap-2">
+          <LinkIcon className="w-4 h-4 text-gray-500 shrink-0"/>
+          <input type="url" value={textoLink} onChange={(e) => setTextoLink(e.target.value)} onBlur={() => atualizarPropriedade('Link', 'url', textoLink)} placeholder="Link do Roteiro / Drive..." className="flex-1 bg-black/40 rounded p-1.5 text-xs font-semibold text-gray-300 focus:outline-none border border-transparent focus:border-indigo-500/50" />
+          {textoLink && <a href={textoLink} target="_blank" rel="noreferrer" className="p-1.5 bg-indigo-500/20 rounded-md text-indigo-400 hover:bg-indigo-500/40"><ExternalLink className="w-3.5 h-3.5"/></a>}
+        </div>
+
+        <div className="bg-white/5 border border-white/10 rounded-xl p-3">
+          <p className="text-[9px] text-gray-500 uppercase font-bold mb-1.5 flex items-center gap-1"><FileText className="w-3 h-3" /> Diretrizes / Observações</p>
+          <textarea value={textoObservacao} onChange={(e) => setTextoObservacao(e.target.value)} onBlur={() => atualizarPropriedade('Observações', 'rich_text', textoObservacao)} placeholder="Anotações importantes só para este vídeo..." className="w-full bg-black/40 border border-white/5 rounded-lg p-2.5 text-xs text-gray-300 min-h-[70px] focus:outline-none focus:border-indigo-500/50 resize-y" />
+        </div>
+        
+        <div>
+          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 flex items-center gap-1.5"><Activity className="w-3.5 h-3.5" /> Mudar Fase</p>
+          <div className="flex flex-wrap items-center gap-1.5">
+            {fasesDoSistema.map(fase => (
+              <div key={fase} className={`group relative flex items-center pl-2.5 pr-1 py-1 border rounded-lg transition-colors cursor-pointer ${faseAtual === fase ? 'bg-indigo-500/20 border-indigo-500/50' : 'bg-black/40 border-white/10 hover:bg-white/5'}`}>
+                <button onClick={() => atualizarPropriedade('Fase Atual', 'select', fase)} className={`text-xs font-bold mr-1 ${faseAtual === fase ? 'text-indigo-400' : 'text-gray-400 group-hover:text-white'}`}>{fase}</button>
+                <button onClick={(e) => { e.stopPropagation(); setModalExclusao({ ativo: true, fase }); }} className="p-0.5 rounded opacity-100 md:opacity-0 md:group-hover:opacity-100 text-gray-500 hover:text-red-400"><X className="w-3 h-3" /></button>
+              </div>
+            ))}
+            {criandoFase ? (
+              <div className="flex items-center gap-1.5 bg-emerald-500/10 px-2 py-1 rounded-lg border border-emerald-500/50">
+                <input autoFocus value={nomeNovaFase} onChange={e => setNomeNovaFase(e.target.value)} onKeyDown={e => e.key === 'Enter' && salvarNovaFase()} placeholder="Nome..." className="bg-transparent text-xs font-bold text-emerald-100 outline-none w-20" />
+                <button onClick={salvarNovaFase} className="text-emerald-400"><CheckCircle className="w-3.5 h-3.5"/></button>
+              </div>
+            ) : (<button onClick={() => setCriandoFase(true)} className="px-2 py-1 text-[10px] uppercase font-bold border border-dashed border-gray-600 rounded-lg flex items-center gap-1 text-gray-400 hover:text-white hover:border-gray-400"><Plus className="w-3 h-3"/> Nova Fase</button>)}
+          </div>
+        </div>
+
+        <div>
+          <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1.5 flex items-center gap-1.5"><Clock className="w-3.5 h-3.5" /> Auditoria de Tempo</p>
+          <div className="bg-black/40 border border-white/10 rounded-xl p-1.5">
+            {fasesDoSistema.map(fase => (
+              <div key={fase} className="flex justify-between items-center p-2 rounded-lg hover:bg-white/5">
+                <span className={`text-[10px] font-bold uppercase ${faseAtual === fase ? 'text-indigo-400' : 'text-gray-500'}`}>{fase}</span>
+                <span className="font-mono text-xs text-gray-400">{formatarTempo(projetoSelecionado.properties?.[`Tempo ${fase}`]?.number || 0)}</span>
+              </div>
+            ))}
+            <div className="h-[1px] bg-white/5 my-1 mx-2"></div>
+            <div className="flex justify-between items-center p-2"><span className="text-[11px] font-bold text-gray-300 uppercase tracking-widest">Total Gasto</span><span className="font-mono text-sm font-bold text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20">{formatarTempo(tempoTotal)}</span></div>
+          </div>
+        </div>
+      </div>
+    );
+  };
 
   // === TELA 1: LOBBY DE WORKSPACES ===
   if (workspaceAtual === null) {
@@ -292,7 +440,7 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#050505] text-gray-100 p-4 md:p-6 font-sans overflow-hidden bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-indigo-900/10 via-[#050505] to-[#050505]" onClick={() => setMenuAberto(null)}>
       
-      {/* MODAL DE CALENDÁRIO */}
+      {/* MODAIS (Calendário e Exclusão de Fase) */}
       {addCalendarioDia && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm px-4" onClick={() => setAddCalendarioDia(null)}>
           <div onClick={e => e.stopPropagation()} className="bg-[#1a1a1a] border border-white/20 p-5 rounded-2xl shadow-2xl animate-in zoom-in-95 max-w-[300px] w-full">
@@ -305,6 +453,19 @@ export default function Home() {
             <div className="flex gap-3 mt-5">
               <button onClick={() => setAddCalendarioDia(null)} className="flex-1 text-xs font-bold text-gray-400 bg-white/5 hover:bg-white/10 py-2.5 rounded-lg transition-colors">Cancelar</button>
               <button disabled={!calTitulo.trim() || processandoAcao !== null} onClick={() => handleAdicionarCalendario(addCalendarioDia)} className={`flex-1 text-xs font-bold py-2.5 rounded-lg flex items-center justify-center transition-all ${calTitulo.trim() ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-[0_0_15px_rgba(79,70,229,0.3)]' : 'bg-indigo-600/30 text-white/50 cursor-not-allowed'}`}>{processandoAcao ? <Loader2 className="w-4 h-4 animate-spin"/> : 'Salvar'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {modalExclusao.ativo && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/80 backdrop-blur-sm px-4">
+          <div className="bg-[#121212] border border-white/10 rounded-2xl p-6 max-w-sm w-full shadow-2xl">
+            <div className="flex items-center gap-3 mb-4"><div className="w-10 h-10 rounded-full bg-red-500/10 flex items-center justify-center border border-red-500/20"><AlertTriangle className="w-5 h-5 text-red-500" /></div><h3 className="text-lg font-bold text-white">Excluir Fase?</h3></div>
+            <p className="text-sm text-gray-400 mb-6">Apagar a fase <strong className="text-white">"{modalExclusao.fase}"</strong> vai excluir o tempo dela em todos os projetos.</p>
+            <div className="flex gap-3 justify-end">
+              <button onClick={() => setModalExclusao({ ativo: false, fase: "" })} className="px-4 py-2 rounded-lg text-sm font-bold text-gray-400 hover:bg-white/5">Cancelar</button>
+              <button onClick={confirmarExclusaoFase} className="px-4 py-2 rounded-lg text-sm font-bold bg-red-500/10 text-red-500 hover:bg-red-500 hover:text-white border border-red-500/20">Sim, Excluir</button>
             </div>
           </div>
         </div>
@@ -339,7 +500,7 @@ export default function Home() {
           )}
         </header>
 
-        {/* VITRINE DE LANÇAMENTOS */}
+        {/* VITRINE DE LANÇAMENTOS (Com a Tag do Canal) */}
         <section className="bg-[#0f0f0f] p-4 rounded-2xl border border-white/5 shadow-inner">
           <h2 className="text-[10px] font-bold text-indigo-400 mb-4 uppercase tracking-widest flex items-center gap-2"><CalendarDays className="w-4 h-4"/> Lançamentos - {workspaceAtual}</h2>
           
@@ -359,13 +520,17 @@ export default function Home() {
                     {itensDoDia.map((item: any) => {
                       const rede = item.properties?.['Plataforma de Lançamento']?.rich_text?.[0]?.plain_text || "YouTube";
                       const titulo = item.properties?.Nome?.title[0]?.plain_text || "Vídeo";
+                      const canalCal = item.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text || "";
                       const corRede = rede === "YouTube" ? "text-red-400 bg-red-500/10 border-red-500/20" : rede === "TikTok" ? "text-cyan-400 bg-cyan-500/10 border-cyan-500/20" : "text-fuchsia-400 bg-fuchsia-500/10 border-fuchsia-500/20";
                       
                       return (
                         <div key={item.id} className="group/cal bg-black/80 rounded border border-white/10 p-2 relative hover:border-white/30 transition-colors shrink-0 flex flex-col">
-                          <div className="flex justify-between items-start mb-1">
-                            <div className={`text-[8px] font-black uppercase tracking-wider w-fit px-1.5 py-0.5 rounded border ${corRede}`}>{rede}</div>
-                            <button onClick={(e) => { e.stopPropagation(); handleDeletarCard(item.id); }} className="bg-red-500/80 hover:bg-red-500 text-white rounded p-0.5 opacity-100 md:opacity-0 md:group-hover/cal:opacity-100 transition-opacity"><X className="w-2.5 h-2.5"/></button>
+                          <div className="flex justify-between items-start mb-1 gap-2">
+                            <div className="flex items-center gap-1.5 min-w-0">
+                               <div className={`text-[8px] font-black uppercase tracking-wider w-fit px-1.5 py-0.5 rounded border ${corRede} shrink-0`}>{rede}</div>
+                               {canalCal && <span className="text-[9px] font-bold text-gray-400 truncate">{canalCal}</span>}
+                            </div>
+                            <button onClick={(e) => { e.stopPropagation(); handleDeletarCard(item.id); }} className="bg-red-500/80 hover:bg-red-500 text-white rounded p-0.5 opacity-100 md:opacity-0 md:group-hover/cal:opacity-100 transition-opacity shrink-0"><X className="w-2.5 h-2.5"/></button>
                           </div>
                           <div className="text-[9px] text-gray-400 font-medium break-words leading-tight" title={titulo}>{titulo}</div>
                         </div>
@@ -378,7 +543,7 @@ export default function Home() {
           </div>
         </section>
 
-        {/* BARRA DE CRIAÇÃO MOVIDA PARA BAIXO DO CALENDÁRIO */}
+        {/* BARRA DE CRIAÇÃO */}
         <section className="bg-white/5 backdrop-blur-xl p-2 pr-2 md:p-2.5 md:pr-2.5 rounded-xl border border-white/10 flex gap-2 w-full shadow-lg focus-within:border-indigo-500/50 transition-all">
           <input type="text" value={nomeNovoProjeto} onChange={(e) => setNomeNovoProjeto(e.target.value)} onKeyDown={(e) => e.key === 'Enter' && handleCriarProjeto()} placeholder={`Criar novo vídeo em ${workspaceAtual}...`} disabled={criandoProjeto} className="flex-1 bg-transparent px-3 text-white font-bold placeholder-gray-600 focus:outline-none text-sm disabled:opacity-50" />
           <button onClick={handleCriarProjeto} disabled={criandoProjeto || !nomeNovoProjeto.trim()} className="bg-indigo-600 hover:bg-indigo-500 text-white px-5 py-2 rounded-lg font-bold text-xs flex items-center justify-center gap-1.5 min-w-[100px] shadow-lg shadow-indigo-500/20 disabled:opacity-50 transition-all">
@@ -405,27 +570,90 @@ export default function Home() {
                 const nome = projeto.properties?.Nome?.title[0]?.plain_text || "Projeto";
                 const faseAtual = projeto.properties?.['Fase Atual']?.select?.name || "Pesquisa";
                 const statusRelogio = projeto.properties?.['Status do Relógio']?.select?.name || "Parado";
+                const prioridade = projeto.properties?.['Prioridade']?.select?.name;
+                const canal = projeto.properties?.['Canal de Postagem']?.rich_text?.[0]?.plain_text;
+                const alvoBruto = projeto.properties?.['Data Alvo']?.date?.start;
+                const alvo = alvoBruto ? alvoBruto.split('T')[0] : null;
+                const temObservacao = !!projeto.properties?.['Observações']?.rich_text?.[0]?.plain_text;
+                const link = projeto.properties?.['Link']?.url;
+                const responsavel = projeto.properties?.['Responsável']?.rich_text?.[0]?.plain_text;
+                
                 const rodando = statusRelogio === "Rodando";
+                const isFinalPhase = faseAtual === (fasesDoSistema.length > 0 ? fasesDoSistema[fasesDoSistema.length -1] : "");
+                const isAtrasado = alvo && alvo < hojeISO && !isFinalPhase;
+                const isHoje = alvo && alvo === hojeISO && !isFinalPhase;
+                const alerta = isAtrasado || isHoje;
+                const urgente = prioridade === "Urgente" || alerta;
                 
                 let tempoParaExibir = projeto.properties?.[`Tempo ${faseAtual}`]?.number || 0;
                 if (timersLocais[projeto.id]) { tempoParaExibir = timersLocais[projeto.id].acumulado + Math.floor((horaAtual - timersLocais[projeto.id].inicio) / 1000); } 
                 else if (rodando && projeto.properties?.['Último Início']?.date?.start) { tempoParaExibir += Math.floor((horaAtual - new Date(projeto.properties['Último Início'].date.start).getTime()) / 1000); }
 
+                const totalFases = fasesDoSistema.length || 1;
+                const indiceFase = fasesDoSistema.indexOf(faseAtual);
+                let porcentagem = 10;
+                if (isFinalPhase) porcentagem = 100;
+                else if (indiceFase >= 0) porcentagem = Math.max(10, ((indiceFase + 1) / totalFases) * 100);
+
                 return (
-                  <div key={projeto.id} onClick={() => abrirPainel(projeto)} className={`group relative flex flex-col bg-[#111] bg-opacity-80 backdrop-blur-xl border rounded-2xl aspect-[4/3] transition-all duration-300 hover:-translate-y-1 cursor-pointer overflow-hidden ${rodando ? 'border-indigo-500/50 shadow-[0_10px_30px_rgba(79,70,229,0.15)]' : 'border-white/5 hover:border-white/20'}`}>
+                  <div key={projeto.id} onClick={() => abrirPainel(projeto)} className={`group relative flex flex-col bg-[#111] bg-opacity-80 backdrop-blur-xl border rounded-2xl aspect-[4/3] transition-all duration-300 hover:-translate-y-1 cursor-pointer overflow-hidden ${rodando ? 'border-indigo-500/50 shadow-[0_10px_30px_rgba(79,70,229,0.15)]' : urgente ? 'border-red-500/50 shadow-[0_10px_30px_rgba(239,68,68,0.15)]' : 'border-white/5 hover:border-white/20'}`}>
+                    <div className="absolute bottom-0 left-0 w-full h-1.5 bg-white/5"><div className={`h-full transition-all duration-500 ease-out ${isFinalPhase ? 'bg-emerald-500 shadow-[0_0_15px_#10b981]' : 'bg-indigo-500 shadow-[0_0_10px_#6366f1]'}`} style={{ width: `${porcentagem}%` }}></div></div>
+                    
                     <div className="p-4 flex flex-col h-full z-10">
                       <div className="flex justify-between items-center mb-2.5">
-                        <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded border ${rodando ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300' : 'bg-white/5 border-white/10 text-gray-400'}`}>
-                           {rodando && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse"></span>} {faseAtual}
-                        </span>
-                        <button onClick={(e) => { e.stopPropagation(); handleDeletarCard(projeto.id); }} className="text-gray-500 hover:text-red-400 p-1 opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"><Trash2 className="w-3.5 h-3.5" /></button>
+                        <div className="flex items-center gap-1.5">
+                          {responsavel && (
+                            <div className="flex items-center gap-1 bg-white/10 px-2 py-0.5 rounded-full border border-white/5">
+                              <User className="w-3 h-3 text-indigo-300"/>
+                              <span className="text-[10px] font-bold text-gray-300 truncate max-w-[100px]">{responsavel}</span>
+                            </div>
+                          )}
+                        </div>
+                        {/* BOTÃO DOS 3 PONTINHOS RESTAURADO AQUI */}
+                        <div className="relative">
+                          <button onClick={(e) => { e.stopPropagation(); toggleMenu(projeto.id); }} className="text-gray-500 hover:text-white p-1 bg-white/5 rounded-md opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity"><MoreHorizontal className="w-4 h-4" /></button>
+                          {menuAberto === projeto.id && (
+                            <div className="absolute right-0 top-8 w-44 bg-[#1a1a1a]/95 backdrop-blur-xl border border-white/10 rounded-xl shadow-2xl z-50 p-1.5 flex flex-col animate-in fade-in zoom-in duration-200">
+                              <button onClick={(e) => iniciarEdicaoNome(e, projeto.id, nome)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg"><Edit2 className="w-3.5 h-3.5" /> Renomear</button>
+                              <button onClick={(e) => handleDuplicarProjeto(e, projeto)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 hover:bg-indigo-500/10 rounded-lg"><Copy className="w-3.5 h-3.5" /> Duplicar</button>
+                              <button onClick={(e) => handleZerarTempo(e, projeto.id, faseAtual)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-gray-300 hover:text-white hover:bg-white/5 rounded-lg"><RotateCcw className="w-3.5 h-3.5" /> Zerar Relógio</button>
+                              <div className="h-[1px] bg-white/10 my-1"></div>
+                              <button onClick={(e) => handleDeletarCard(projeto.id)} className="flex items-center gap-2.5 px-3 py-2 text-xs font-bold text-red-400 hover:text-red-300 hover:bg-red-500/10 rounded-lg"><Trash2 className="w-3.5 h-3.5" /> Deletar</button>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                      <h3 className="font-bold text-sm md:text-base leading-tight text-gray-100 line-clamp-2 mt-1">{nome}</h3>
+
+                      <div className="mb-2 flex items-start gap-1.5">
+                        {urgente && <AlertTriangle className={`w-4 h-4 shrink-0 mt-0.5 ${isAtrasado ? 'text-red-500 animate-pulse' : 'text-amber-500'}`} />}
+                        {editandoId === projeto.id ? (
+                          <input type="text" autoFocus value={nomeEditado} onChange={(e) => setNomeEditado(e.target.value)} onBlur={() => salvarEdicaoNome(projeto.id)} onKeyDown={(e) => { if(e.key === 'Enter') salvarEdicaoNome(projeto.id) }} onClick={(e) => e.stopPropagation()} className="w-full bg-black/50 text-white text-sm font-bold border border-indigo-500/50 rounded px-1.5 py-0.5 outline-none shadow-lg" />
+                        ) : (
+                          <h3 className={`font-bold text-sm md:text-base leading-tight line-clamp-2 ${isFinalPhase ? 'text-gray-400' : 'text-gray-100'}`}>{nome}</h3>
+                        )}
+                      </div>
+                      
+                      <div className="flex flex-col gap-1.5 my-auto">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className={`inline-flex items-center gap-1 text-[9px] font-black uppercase tracking-widest px-2 py-0.5 rounded border ${isFinalPhase ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : rodando ? 'bg-indigo-500/20 border-indigo-500/30 text-indigo-300' : 'bg-white/5 border-white/10 text-gray-400'}`}>
+                             {rodando && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse shadow-[0_0_8px_#818cf8]"></span>} {faseAtual}
+                          </span>
+                          {canal && <span className="text-[9px] font-black text-gray-400 bg-white/5 px-1.5 py-0.5 rounded border border-white/5 truncate max-w-[80px]">#{canal}</span>}
+                        </div>
+                        <div className="flex gap-1.5 mt-1 flex-wrap">
+                           {temObservacao && <div title="Anotações" className="p-1 rounded bg-amber-500/10 text-amber-500/80 border border-amber-500/20"><FileText className="w-3 h-3" /></div>}
+                           {link && <a href={link} target="_blank" rel="noreferrer" title="Material" onClick={e => e.stopPropagation()} className="p-1 rounded bg-indigo-500/10 text-indigo-400 hover:bg-indigo-500/30 border border-indigo-500/20 transition-colors"><LinkIcon className="w-3 h-3" /></a>}
+                           {alvo && <div title={`Prazo: ${alvo}`} className={`p-1 rounded border flex items-center gap-1 px-1.5 ${alerta ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-white/5 text-gray-400 border-white/10'}`}><Calendar className="w-3 h-3"/> <span className="text-[9px] font-bold">{alvo.split('-').reverse().slice(0,2).join('/')}</span></div>}
+                        </div>
+                      </div>
+
                       <div className="flex items-end justify-between mt-auto pt-3 pb-1">
-                        <div className={`text-2xl font-mono tracking-tighter font-light ${rodando ? 'text-indigo-400' : 'text-gray-500'}`}>{formatarTempo(tempoParaExibir)}</div>
-                        <button onClick={(e) => handleAlternarRelogio(e, projeto.id, statusRelogio, faseAtual, projeto.properties?.['Último Início']?.date?.start, projeto.properties?.[`Tempo ${faseAtual}`]?.number || 0)} className={`w-10 h-10 flex items-center justify-center rounded-full transition-all transform active:scale-95 z-20 ${rodando ? 'bg-indigo-500 text-white shadow-[0_0_20px_rgba(99,102,241,0.6)]' : 'bg-white/5 text-gray-400 hover:text-white border border-white/5'}`}>
-                          {rodando ? <Square className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 ml-1 fill-current" />}
-                        </button>
+                        <div className={`text-2xl font-mono tracking-tighter font-light ${rodando ? 'text-indigo-400 drop-shadow-[0_0_8px_rgba(129,140,248,0.5)]' : 'text-gray-500'}`}>{formatarTempo(tempoParaExibir)}</div>
+                        {!isFinalPhase && (
+                          <button onClick={(e) => handleAlternarRelogio(e, projeto.id, statusRelogio, faseAtual, projeto.properties?.['Último Início']?.date?.start, projeto.properties?.[`Tempo ${faseAtual}`]?.number || 0)} className={`w-10 h-10 flex items-center justify-center rounded-full transition-all transform active:scale-95 z-20 ${rodando ? 'bg-indigo-500 text-white shadow-[0_0_20px_rgba(99,102,241,0.6)] hover:bg-indigo-600' : 'bg-white/5 text-gray-400 hover:bg-white/10 hover:text-white border border-white/5'}`}>
+                            {rodando ? <Square className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4 ml-1 fill-current" />}
+                          </button>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -435,6 +663,16 @@ export default function Home() {
           )}
         </section>
       </div>
+
+      {/* GAVETAS LATERAIS (O Painel Tático Retornou!) */}
+      {painelAberto && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40 transition-opacity" onClick={() => setPainelAberto(false)}></div>}
+      <aside className={`fixed top-0 right-0 h-full w-full md:w-[420px] bg-[#0c0c0c]/95 backdrop-blur-2xl border-l border-white/10 z-40 transform transition-transform duration-300 shadow-[-30px_0_60px_rgba(0,0,0,0.7)] flex flex-col ${painelAberto ? 'translate-x-0' : 'translate-x-full'}`}>
+        <div className="flex items-center justify-between p-5 border-b border-white/5 bg-white/5">
+          <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2"><Target className="w-4 h-4 text-indigo-500"/> Visão Tática</h2>
+          <button onClick={() => setPainelAberto(false)} className="p-1.5 bg-white/5 hover:bg-white/10 text-gray-400 hover:text-white rounded-md transition-colors"><X className="w-4 h-4" /></button>
+        </div>
+        {renderizarPainel()}
+      </aside>
 
       {gavetaIdeiasAberta && <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-40" onClick={() => setGavetaIdeiasAberta(false)}></div>}
       <aside className={`fixed top-0 right-0 h-full w-full md:w-[350px] bg-[#0f0f0f] border-l border-white/10 z-50 transform transition-transform duration-300 shadow-2xl flex flex-col ${gavetaIdeiasAberta ? 'translate-x-0' : 'translate-x-full'}`}>
